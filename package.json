@@ -1,7 +1,7 @@
 {
-  "name": "bot-wa-neraka",
+  "name": "bot-wangz",
   "version": "6.6.6",
-  "description": "WhatsApp Bot Arsitek Neraka - Pairing Code, Anti Delay, Self/Public Mode, Multi Owner",
+  "description": "BOT WANGZ - WhatsApp Bot Pairing Code, Anti Delay, Self/Public Mode",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
