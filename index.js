@@ -32,15 +32,16 @@ async function startBot() {
       keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
     },
     printQRInTerminal: false,
-    browser: Browsers.ubuntu('Chrome'),
+    browser: ['BOT WANGZ', 'Chrome', '6.6.6'],
     logger: pino({ level: 'silent' }),
-    connectTimeoutMs: 60_000,
-    keepAliveIntervalMs: 10_000,
+    connectTimeoutMs: 30_000,
+    keepAliveIntervalMs: 5_000,
     emitOwnEvents: true,
     generateHighQualityLinkPreview: true,
+    markOnlineOnConnect: false,
+    syncFullHistory: false,
   });
 
-  // Pairing & auto owner
   if (PAIRING_CODE && !sock.authState.creds.registered) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     console.log('─────────────────────────────');
@@ -60,27 +61,25 @@ async function startBot() {
       const myJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
       if (!isOwner(myJid)) {
         addOwner(myJid);
-        console.log(`👑 Owner otomatis: ${myJid.split('@')[0]}`);
+        console.log(`👑 Owner: ${myJid.split('@')[0]}`);
       }
-      console.log('✅ BOT WANGZ TERSAMBUNG!');
-      console.log('💬 Bot bisa respon chat sendiri & dari orang lain.');
+      console.log('✅ BOT WANGZ SIAP!');
     } else if (connection === 'close') {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log('⚠️ Koneksi putus, reconnect...');
-      if (shouldReconnect) setTimeout(startBot, 3000);
-      else console.log('❌ Logout. Hapus folder session lalu ulangi.');
+      if (shouldReconnect) {
+        console.log('🔄 Reconnect...');
+        setTimeout(startBot, 2_000);
+      } else {
+        console.log('❌ Logout. Hapus session & jalankan ulang.');
+      }
     }
   });
 
   sock.ev.on('creds.update', saveCreds);
 
-  // Pesan masuk
   sock.ev.on('messages.upsert', async (m) => {
     const msg = m.messages[0];
     if (!msg.message) return;
-    
-    // 🔥 HAPUS BARIS INI: if (msg.key.fromMe) return;
-    // Sekarang bot akan memproses pesan dari diri sendiri juga!
 
     const type = Object.keys(msg.message)[0];
     const body =
@@ -100,16 +99,15 @@ async function startBot() {
     const isFromMe = msg.key.fromMe || false;
     const pushname = msg.pushName || (isFromMe ? 'Owner' : 'User');
     const isGroup = sender.endsWith('@g.us');
-    const groupMetadata = isGroup ? await sock.groupMetadata(sender) : null;
-    const groupAdmins = isGroup ? groupMetadata.participants.filter(p => p.admin).map(p => p.id) : [];
+    const groupMetadata = isGroup ? await sock.groupMetadata(sender).catch(() => null) : null;
+    const groupAdmins = isGroup && groupMetadata ? groupMetadata.participants.filter(p => p.admin).map(p => p.id) : [];
     const isAdmin = groupAdmins.includes(sender) || isFromMe;
     const myJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
     const isBotAdmin = isGroup ? groupAdmins.includes(myJid) : false;
 
     const currentMode = getMode();
-    const senderIsOwner = isOwner(sender) || isFromMe; // Chat sendiri = owner otomatis
+    const senderIsOwner = isOwner(sender) || isFromMe;
 
-    // Mode self: abaikan selain owner
     if (currentMode === 'self' && !senderIsOwner) return;
 
     async function react(emoji) {
@@ -118,44 +116,62 @@ async function startBot() {
       } catch (e) {}
     }
 
+    // Singkatan command
+    let fullCommand = command;
+    if (command === 's') fullCommand = 'sticker';
+    if (command === 'h') fullCommand = 'hidetag';
+
     try {
-      switch (command) {
+      switch (fullCommand) {
         case 'menu':
-          await react('⏳');
           await sock.sendMessage(sender, { text: menuText(pushname, senderIsOwner, sender) }, { quoted: msg });
           await react('✅');
           break;
 
         case 'ping': {
-          await react('⏳');
           const start = Date.now();
-          await sock.sendMessage(sender, { text: '🏓 Pong!' });
-          const end = Date.now();
-          await sock.sendMessage(sender, { text: `⚡ Respon: ${end - start} ms`, edit: msg.key });
+          await sock.sendMessage(sender, { text: `⚡ Respon: ${Date.now() - start} ms` });
           await react('✅');
           break;
         }
 
         case 'owner':
-          await react('⏳');
           await sock.sendMessage(sender, { text: `👑 *OWNER BOT WANGZ*\n\nInstagram: @botwangz\nTelegram: t.me/botwangz` });
           await react('✅');
           break;
 
         case 'info':
-          await react('⏳');
-          await sock.sendMessage(sender, { text: `🤖 *INFO BOT WANGZ*\nNama: BOT WANGZ\nVersi: 6.6.6\nLibrary: Baileys Pairing Code\nOwner: BOT WANGZ Official` });
+          await sock.sendMessage(sender, { text: `🤖 *INFO BOT WANGZ*\nNama: BOT WANGZ\nVersi: 6.6.6\nLibrary: Baileys\nMode: Anti Delay` });
           await react('✅');
           break;
 
         case 'runtime': {
-          await react('⏳');
           const uptime = process.uptime();
           const h = Math.floor(uptime / 3600);
           const m = Math.floor((uptime % 3600) / 60);
           const s = Math.floor(uptime % 60);
-          await sock.sendMessage(sender, { text: `⏱️ *RUNTIME:* ${h} jam ${m} menit ${s} detik` });
+          await sock.sendMessage(sender, { text: `⏱️ *RUNTIME:* ${h}j ${m}m ${s}d` });
           await react('✅');
+          break;
+        }
+
+        case 'brat': {
+          const text = args.join(' ');
+          if (!text) {
+            await react('❌');
+            await sock.sendMessage(sender, { text: '📌 *Cara pakai:* `.brat [teks]`\nContoh: `.brat wangz ganteng`' });
+            return;
+          }
+          await react('⏳');
+          try {
+            const response = await fetch(`https://brat.caliphdev.com/api/brat?text=${encodeURIComponent(text)}`);
+            const buffer = Buffer.from(await response.arrayBuffer());
+            await sock.sendMessage(sender, { sticker: buffer, pack: 'BOT WANGZ', author: 'Brat HD' });
+            await react('✅');
+          } catch (e) {
+            await react('❌');
+            await sock.sendMessage(sender, { text: '❌ Gagal bikin stiker brat, coba lagi.' });
+          }
           break;
         }
 
@@ -168,13 +184,13 @@ async function startBot() {
             await sock.sendMessage(sender, { text: help || 'Balas gambar/video!' });
             return;
           }
-          await react('⏳');
           const mediaType = quoted.imageMessage ? 'image' : quoted.videoMessage ? 'video' : null;
           if (!mediaType) {
             await react('❌');
             await sock.sendMessage(sender, { text: help || 'Media tidak didukung!' });
             return;
           }
+          await react('⏳');
           const stream = await downloadContentFromMessage(quoted[mediaType + 'Message'], mediaType);
           let buffer = Buffer.from([]);
           for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
@@ -200,21 +216,18 @@ async function startBot() {
           break;
         }
 
-        // GROUP COMMANDS
         case 'hidetag':
-          if (!isGroup) { await react('❌'); await sock.sendMessage(sender, { text: 'Perintah khusus grup!' }); return; }
-          if (!isAdmin && !isFromMe) { await react('❌'); await sock.sendMessage(sender, { text: 'Lu bukan admin!' }); return; }
-          await react('⏳');
-          await sock.sendMessage(sender, { text: args.join(' ') || 'Hidetag by BOT WANGZ', mentions: groupMetadata.participants.map(p => p.id) });
+          if (!isGroup) { await react('❌'); await sock.sendMessage(sender, { text: 'Grup only!' }); return; }
+          if (!isAdmin && !isFromMe) { await react('❌'); return; }
+          await sock.sendMessage(sender, { text: args.join(' ') || 'Hidetag', mentions: groupMetadata.participants.map(p => p.id) });
           await react('✅');
           break;
 
         case 'promote': {
           const help = getCommandHelp(command);
-          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); await sock.sendMessage(sender, { text: 'Gagal, cek admin/bot admin.' }); return; }
+          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); return; }
           const target = msg.message?.extendedTextMessage?.contextInfo?.participant;
           if (!target) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
-          await react('⏳');
           await sock.groupParticipantsUpdate(sender, [target], 'promote');
           await sock.sendMessage(sender, { text: `✅ Promote @${target.split('@')[0]}`, mentions: [target] });
           await react('✅');
@@ -223,10 +236,9 @@ async function startBot() {
 
         case 'demote': {
           const help = getCommandHelp(command);
-          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); await sock.sendMessage(sender, { text: 'Gagal, cek admin/bot admin.' }); return; }
+          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); return; }
           const target = msg.message?.extendedTextMessage?.contextInfo?.participant;
           if (!target) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
-          await react('⏳');
           await sock.groupParticipantsUpdate(sender, [target], 'demote');
           await sock.sendMessage(sender, { text: `⬇️ Demote @${target.split('@')[0]}`, mentions: [target] });
           await react('✅');
@@ -235,10 +247,9 @@ async function startBot() {
 
         case 'kick': {
           const help = getCommandHelp(command);
-          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); await sock.sendMessage(sender, { text: 'Gagal, cek admin/bot admin.' }); return; }
+          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); return; }
           const target = msg.message?.extendedTextMessage?.contextInfo?.participant;
           if (!target) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
-          await react('⏳');
           await sock.groupParticipantsUpdate(sender, [target], 'remove');
           await sock.sendMessage(sender, { text: `👢 Kick @${target.split('@')[0]}`, mentions: [target] });
           await react('✅');
@@ -249,17 +260,15 @@ async function startBot() {
           const help = getCommandHelp(command);
           if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); return; }
           if (!args[0]) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
-          await react('⏳');
           const userJid = args[0].replace(/[^0-9]/g, '') + '@s.whatsapp.net';
           await sock.groupParticipantsUpdate(sender, [userJid], 'add');
-          await sock.sendMessage(sender, { text: `➕ Berhasil menambahkan ${args[0]}` });
+          await sock.sendMessage(sender, { text: `➕ ${args[0]} ditambahkan.` });
           await react('✅');
           break;
         }
 
         case 'tagall':
           if (!isGroup || (!isAdmin && !isFromMe)) { await react('❌'); return; }
-          await react('⏳');
           await sock.sendMessage(sender, { text: args.join(' ') || '📢 Tag all', mentions: groupMetadata.participants.map(p => p.id) });
           await react('✅');
           break;
@@ -314,27 +323,25 @@ async function startBot() {
           if (!conf.badwords.includes(word)) conf.badwords.push(word);
           setGroupConfig(sender, conf);
           await react('✅');
-          await sock.sendMessage(sender, { text: `Kata '${word}' ditambahkan.` });
+          await sock.sendMessage(sender, { text: `'${word}' ditambahkan.` });
           break;
         }
 
         case 'totaluser': {
-          await react('⏳');
           const chats = await sock.fetchAllWhatsAppContacts();
-          await sock.sendMessage(sender, { text: `Total chat: ${chats.length}` });
+          await sock.sendMessage(sender, { text: `Total: ${chats.length} chat` });
           await react('✅');
           break;
         }
 
         case 'broadcast': {
           const help = getCommandHelp(command);
-          if (!senderIsOwner) { await react('❌'); await sock.sendMessage(sender, { text: 'Hanya owner!' }); return; }
+          if (!senderIsOwner) { await react('❌'); return; }
           const bcText = args.join(' ');
           if (!bcText) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
-          await react('⏳');
           const allChats = await sock.fetchAllWhatsAppContacts();
           for (const chat of allChats) {
-            try { await sock.sendMessage(chat.id, { text: bcText }); await delay(500); } catch (e) {}
+            try { await sock.sendMessage(chat.id, { text: bcText }); await delay(200); } catch (e) {}
           }
           await react('✅');
           break;
@@ -342,10 +349,9 @@ async function startBot() {
 
         case 'delete': {
           const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
-          const quotedSender = msg.message?.extendedTextMessage?.contextInfo?.participant || sender;
           if (!quotedMsg) return;
           try {
-            await sock.sendMessage(sender, { delete: { remoteJid: sender, fromMe: isFromMe || (quotedSender === myJid), id: quotedMsg, participant: quotedSender } });
+            await sock.sendMessage(sender, { delete: msg.key });
             await react('✅');
           } catch (e) {
             await react('❌');
@@ -353,7 +359,6 @@ async function startBot() {
           break;
         }
 
-        // OWNER ONLY
         case 'self':
           if (!senderIsOwner) { await react('❌'); return; }
           setMode('self');
@@ -378,7 +383,6 @@ async function startBot() {
             await sock.sendMessage(sender, { text: `✅ Owner @${targetJid.split('@')[0]} ditambahkan.`, mentions: [targetJid] });
           } else {
             await react('⚠️');
-            await sock.sendMessage(sender, { text: 'Sudah menjadi owner.' });
           }
           break;
         }
@@ -393,7 +397,6 @@ async function startBot() {
             await sock.sendMessage(sender, { text: `❌ Owner @${targetJid.split('@')[0]} dihapus.`, mentions: [targetJid] });
           } else {
             await react('⚠️');
-            await sock.sendMessage(sender, { text: 'Tidak ditemukan.' });
           }
           break;
         }
@@ -402,63 +405,28 @@ async function startBot() {
           const owners = readSettings().owners;
           const list = owners.map(o => `• wa.me/${o.split('@')[0]}`).join('\n') || 'Tidak ada.';
           await react('✅');
-          await sock.sendMessage(sender, { text: `👑 *DAFTAR OWNER:*\n${list}` });
+          await sock.sendMessage(sender, { text: `👑 *OWNER:*\n${list}` });
           break;
         }
 
         default: {
-          const help = getCommandHelp(command);
-          if (help) {
-            await react('❌');
-            await sock.sendMessage(sender, { text: help });
-            break;
-          }
-
-          await react('❌');
-
+          // Command gak dikenal? Bot diem total.
+          // Cuma cek antilink di background
           if (isGroup && body.includes('https://')) {
             const conf = getGroupConfig(sender);
             if (conf.antilink && isBotAdmin && !isAdmin && !isFromMe) {
               await sock.sendMessage(sender, { delete: msg.key });
-              await sock.sendMessage(sender, { text: `@${sender.split('@')[0]} dilarang kirim link!`, mentions: [sender] });
-            }
-          }
-          if (isGroup) {
-            const conf = getGroupConfig(sender);
-            if (conf.antitoxic && conf.badwords?.length) {
-              const containsBad = conf.badwords.some(b => body.toLowerCase().includes(b));
-              if (containsBad && isBotAdmin) {
-                await sock.sendMessage(sender, { delete: msg.key });
-                await sock.sendMessage(sender, { text: `Kata toxic terdeteksi!` });
-              }
             }
           }
           break;
         }
       }
     } catch (err) {
-      console.error('Error:', err);
-      await react('❌');
-    }
-  });
-
-  // Welcome/Goodbye
-  sock.ev.on('group-participants.update', async (event) => {
-    const { id, participants, action } = event;
-    const config = getGroupConfig(id);
-    if (!config.welcome) return;
-    const groupName = (await sock.groupMetadata(id)).subject || '';
-    for (const participant of participants) {
-      const tag = `@${participant.split('@')[0]}`;
-      if (action === 'add') {
-        await sock.sendMessage(id, { text: `👋 Selamat datang ${tag} di grup ${groupName}`, mentions: [participant] });
-      } else if (action === 'remove') {
-        await sock.sendMessage(id, { text: `👋 Selamat tinggal ${tag}`, mentions: [participant] });
-      }
+      console.error('Error:', err.message);
     }
   });
 
   return sock;
 }
 
-startBot().catch(err => console.error('Fatal error:', err));
+startBot().catch(err => console.error('Fatal:', err));
