@@ -116,13 +116,8 @@ async function startBot() {
       } catch (e) {}
     }
 
-    // Singkatan command
-    let fullCommand = command;
-    if (command === 's') fullCommand = 'sticker';
-    if (command === 'h') fullCommand = 'hidetag';
-
     try {
-      switch (fullCommand) {
+      switch (command) {
         case 'menu':
           await sock.sendMessage(sender, { text: menuText(pushname, senderIsOwner, sender) }, { quoted: msg });
           await react('✅');
@@ -152,26 +147,6 @@ async function startBot() {
           const s = Math.floor(uptime % 60);
           await sock.sendMessage(sender, { text: `⏱️ *RUNTIME:* ${h}j ${m}m ${s}d` });
           await react('✅');
-          break;
-        }
-
-        case 'brat': {
-          const text = args.join(' ');
-          if (!text) {
-            await react('❌');
-            await sock.sendMessage(sender, { text: '📌 *Cara pakai:* `.brat [teks]`\nContoh: `.brat wangz ganteng`' });
-            return;
-          }
-          await react('⏳');
-          try {
-            const response = await fetch(`https://brat.caliphdev.com/api/brat?text=${encodeURIComponent(text)}`);
-            const buffer = Buffer.from(await response.arrayBuffer());
-            await sock.sendMessage(sender, { sticker: buffer, pack: 'BOT WANGZ', author: 'Brat HD' });
-            await react('✅');
-          } catch (e) {
-            await react('❌');
-            await sock.sendMessage(sender, { text: '❌ Gagal bikin stiker brat, coba lagi.' });
-          }
           break;
         }
 
@@ -410,8 +385,6 @@ async function startBot() {
         }
 
         default: {
-          // Command gak dikenal? Bot diem total.
-          // Cuma cek antilink di background
           if (isGroup && body.includes('https://')) {
             const conf = getGroupConfig(sender);
             if (conf.antilink && isBotAdmin && !isAdmin && !isFromMe) {
