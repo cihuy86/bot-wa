@@ -63,6 +63,7 @@ async function startBot() {
         console.log(`👑 Owner otomatis: ${myJid.split('@')[0]}`);
       }
       console.log('✅ BOT WANGZ TERSAMBUNG!');
+      console.log('💬 Bot bisa respon chat sendiri & dari orang lain.');
     } else if (connection === 'close') {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
       console.log('⚠️ Koneksi putus, reconnect...');
@@ -77,7 +78,9 @@ async function startBot() {
   sock.ev.on('messages.upsert', async (m) => {
     const msg = m.messages[0];
     if (!msg.message) return;
-    if (msg.key.fromMe) return;
+    
+    // 🔥 HAPUS BARIS INI: if (msg.key.fromMe) return;
+    // Sekarang bot akan memproses pesan dari diri sendiri juga!
 
     const type = Object.keys(msg.message)[0];
     const body =
@@ -94,16 +97,19 @@ async function startBot() {
     const command = args.shift().toLowerCase();
 
     const sender = msg.key.remoteJid;
-    const pushname = msg.pushName || 'User';
+    const isFromMe = msg.key.fromMe || false;
+    const pushname = msg.pushName || (isFromMe ? 'Owner' : 'User');
     const isGroup = sender.endsWith('@g.us');
     const groupMetadata = isGroup ? await sock.groupMetadata(sender) : null;
     const groupAdmins = isGroup ? groupMetadata.participants.filter(p => p.admin).map(p => p.id) : [];
-    const isAdmin = groupAdmins.includes(sender);
-    const isBotAdmin = isGroup ? groupAdmins.includes(sock.user.id.split(':')[0] + '@s.whatsapp.net') : false;
+    const isAdmin = groupAdmins.includes(sender) || isFromMe;
+    const myJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+    const isBotAdmin = isGroup ? groupAdmins.includes(myJid) : false;
 
     const currentMode = getMode();
-    const senderIsOwner = isOwner(sender);
+    const senderIsOwner = isOwner(sender) || isFromMe; // Chat sendiri = owner otomatis
 
+    // Mode self: abaikan selain owner
     if (currentMode === 'self' && !senderIsOwner) return;
 
     async function react(emoji) {
@@ -197,7 +203,7 @@ async function startBot() {
         // GROUP COMMANDS
         case 'hidetag':
           if (!isGroup) { await react('❌'); await sock.sendMessage(sender, { text: 'Perintah khusus grup!' }); return; }
-          if (!isAdmin) { await react('❌'); await sock.sendMessage(sender, { text: 'Lu bukan admin!' }); return; }
+          if (!isAdmin && !isFromMe) { await react('❌'); await sock.sendMessage(sender, { text: 'Lu bukan admin!' }); return; }
           await react('⏳');
           await sock.sendMessage(sender, { text: args.join(' ') || 'Hidetag by BOT WANGZ', mentions: groupMetadata.participants.map(p => p.id) });
           await react('✅');
@@ -205,7 +211,7 @@ async function startBot() {
 
         case 'promote': {
           const help = getCommandHelp(command);
-          if (!isGroup || !isAdmin || !isBotAdmin) { await react('❌'); await sock.sendMessage(sender, { text: 'Gagal, cek admin/bot admin.' }); return; }
+          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); await sock.sendMessage(sender, { text: 'Gagal, cek admin/bot admin.' }); return; }
           const target = msg.message?.extendedTextMessage?.contextInfo?.participant;
           if (!target) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
           await react('⏳');
@@ -217,7 +223,7 @@ async function startBot() {
 
         case 'demote': {
           const help = getCommandHelp(command);
-          if (!isGroup || !isAdmin || !isBotAdmin) { await react('❌'); await sock.sendMessage(sender, { text: 'Gagal, cek admin/bot admin.' }); return; }
+          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); await sock.sendMessage(sender, { text: 'Gagal, cek admin/bot admin.' }); return; }
           const target = msg.message?.extendedTextMessage?.contextInfo?.participant;
           if (!target) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
           await react('⏳');
@@ -229,7 +235,7 @@ async function startBot() {
 
         case 'kick': {
           const help = getCommandHelp(command);
-          if (!isGroup || !isAdmin || !isBotAdmin) { await react('❌'); await sock.sendMessage(sender, { text: 'Gagal, cek admin/bot admin.' }); return; }
+          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); await sock.sendMessage(sender, { text: 'Gagal, cek admin/bot admin.' }); return; }
           const target = msg.message?.extendedTextMessage?.contextInfo?.participant;
           if (!target) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
           await react('⏳');
@@ -241,7 +247,7 @@ async function startBot() {
 
         case 'add': {
           const help = getCommandHelp(command);
-          if (!isGroup || !isAdmin || !isBotAdmin) { await react('❌'); return; }
+          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); return; }
           if (!args[0]) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
           await react('⏳');
           const userJid = args[0].replace(/[^0-9]/g, '') + '@s.whatsapp.net';
@@ -252,7 +258,7 @@ async function startBot() {
         }
 
         case 'tagall':
-          if (!isGroup || !isAdmin) { await react('❌'); return; }
+          if (!isGroup || (!isAdmin && !isFromMe)) { await react('❌'); return; }
           await react('⏳');
           await sock.sendMessage(sender, { text: args.join(' ') || '📢 Tag all', mentions: groupMetadata.participants.map(p => p.id) });
           await react('✅');
@@ -260,7 +266,7 @@ async function startBot() {
 
         case 'antilink': {
           const help = getCommandHelp(command);
-          if (!isGroup || !isAdmin) { await react('❌'); return; }
+          if (!isGroup || (!isAdmin && !isFromMe)) { await react('❌'); return; }
           const status = args[0]?.toLowerCase();
           if (status !== 'on' && status !== 'off') { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
           setGroupConfig(sender, { antilink: status === 'on' });
@@ -271,7 +277,7 @@ async function startBot() {
 
         case 'welcome': {
           const help = getCommandHelp(command);
-          if (!isGroup || !isAdmin) { await react('❌'); return; }
+          if (!isGroup || (!isAdmin && !isFromMe)) { await react('❌'); return; }
           const status = args[0]?.toLowerCase();
           if (status !== 'on' && status !== 'off') { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
           setGroupConfig(sender, { welcome: status === 'on' });
@@ -282,7 +288,7 @@ async function startBot() {
 
         case 'antitoxic': {
           const help = getCommandHelp(command);
-          if (!isGroup || !isAdmin) { await react('❌'); return; }
+          if (!isGroup || (!isAdmin && !isFromMe)) { await react('❌'); return; }
           const status = args[0]?.toLowerCase();
           if (status !== 'on' && status !== 'off') { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
           setGroupConfig(sender, { antitoxic: status === 'on' });
@@ -300,7 +306,7 @@ async function startBot() {
 
         case 'addbadword': {
           const help = getCommandHelp(command);
-          if (!isGroup || !isAdmin) { await react('❌'); return; }
+          if (!isGroup || (!isAdmin && !isFromMe)) { await react('❌'); return; }
           const word = args[0];
           if (!word) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
           const conf = getGroupConfig(sender);
@@ -336,11 +342,13 @@ async function startBot() {
 
         case 'delete': {
           const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
-          const quotedSender = msg.message?.extendedTextMessage?.contextInfo?.participant;
-          if (!quotedMsg || !quotedSender) return;
-          if (quotedSender === sock.user.id.split(':')[0] + '@s.whatsapp.net') {
-            await sock.sendMessage(sender, { delete: { remoteJid: sender, fromMe: true, id: quotedMsg, participant: quotedSender } });
+          const quotedSender = msg.message?.extendedTextMessage?.contextInfo?.participant || sender;
+          if (!quotedMsg) return;
+          try {
+            await sock.sendMessage(sender, { delete: { remoteJid: sender, fromMe: isFromMe || (quotedSender === myJid), id: quotedMsg, participant: quotedSender } });
             await react('✅');
+          } catch (e) {
+            await react('❌');
           }
           break;
         }
@@ -399,7 +407,6 @@ async function startBot() {
         }
 
         default: {
-          // HANYA tampilkan bantuan jika command dikenali (ada di mapping)
           const help = getCommandHelp(command);
           if (help) {
             await react('❌');
@@ -407,13 +414,11 @@ async function startBot() {
             break;
           }
 
-          // Command tidak dikenal (.brat, .asw, dll) -> hanya reaction ❌
           await react('❌');
 
-          // Antilink & antitoxic tetap dicek
           if (isGroup && body.includes('https://')) {
             const conf = getGroupConfig(sender);
-            if (conf.antilink && isBotAdmin && !isAdmin) {
+            if (conf.antilink && isBotAdmin && !isAdmin && !isFromMe) {
               await sock.sendMessage(sender, { delete: msg.key });
               await sock.sendMessage(sender, { text: `@${sender.split('@')[0]} dilarang kirim link!`, mentions: [sender] });
             }
