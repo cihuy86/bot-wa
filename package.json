@@ -1,7 +1,7 @@
 {
   "name": "bot-wangz",
   "version": "6.6.6",
-  "description": "BOT WANGZ - WhatsApp Bot Pairing Code, Anti Delay, Self/Public Mode",
+  "description": "BOT WANGZ - WhatsApp Bot Pairing Code, Anti Delay",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -9,7 +9,6 @@
   "dependencies": {
     "@whiskeysockets/baileys": "^6.6.0",
     "pino": "^8.17.2",
-    "chalk": "^5.3.0",
     "fs-extra": "^11.2.0"
   }
 }
