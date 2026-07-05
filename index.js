@@ -116,6 +116,23 @@ async function startBot() {
       } catch (e) {}
     }
 
+    // Fungsi untuk mengirim file dari URL (digunakan oleh ytmp3/ytmp4)
+    async function sendMediaFromUrl(url, type, filename) {
+      try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Download gagal');
+        const buffer = Buffer.from(await response.arrayBuffer());
+        if (type === 'audio') {
+          await sock.sendMessage(sender, { audio: buffer, mimetype: 'audio/mpeg', fileName: filename || 'audio.mp3' });
+        } else if (type === 'video') {
+          await sock.sendMessage(sender, { video: buffer, mimetype: 'video/mp4', fileName: filename || 'video.mp4' });
+        }
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
     try {
       switch (command) {
         case 'menu':
@@ -150,24 +167,87 @@ async function startBot() {
           break;
         }
 
-        // ========== BRAT STICKER HD ==========
-        case 'brat': {
-          const text = args.join(' ');
-          if (!text) {
+        // ========== YOUTUBE FITUR ==========
+        case 'ytmp3': {
+          const url = args[0];
+          if (!url) {
             await react('❌');
-            await sock.sendMessage(sender, { text: '📌 *Cara pakai:* `.brat [teks]`\nContoh: `.brat wangz ganteng`' });
+            await sock.sendMessage(sender, { text: getCommandHelp('ytmp3') });
             return;
           }
           await react('⏳');
+          const apiUrl = `https://api.akuari.my.id/downloader/ytmp3?url=${encodeURIComponent(url)}`;
           try {
-            const response = await fetch(`https://brat.caliphdev.com/api/brat?text=${encodeURIComponent(text)}`);
-            if (!response.ok) throw new Error('API Down');
-            const buffer = Buffer.from(await response.arrayBuffer());
-            await sock.sendMessage(sender, { sticker: buffer, pack: 'BOT WANGZ', author: 'Brat HD' });
-            await react('✅');
+            const res = await fetch(apiUrl);
+            const json = await res.json();
+            if (json.status && json.result && json.result.url) {
+              const success = await sendMediaFromUrl(json.result.url, 'audio', json.result.title + '.mp3');
+              await react(success ? '✅' : '❌');
+              if (!success) await sock.sendMessage(sender, { text: '❌ Gagal mengirim audio.' });
+            } else {
+              await react('❌');
+              await sock.sendMessage(sender, { text: '❌ Gagal mendapatkan link download.' });
+            }
           } catch (e) {
             await react('❌');
-            await sock.sendMessage(sender, { text: '❌ Gagal bikin stiker brat, coba lagi nanti.' });
+            await sock.sendMessage(sender, { text: '❌ Error saat menghubungi API.' });
+          }
+          break;
+        }
+
+        case 'ytmp4': {
+          const url = args[0];
+          if (!url) {
+            await react('❌');
+            await sock.sendMessage(sender, { text: getCommandHelp('ytmp4') });
+            return;
+          }
+          await react('⏳');
+          const apiUrl = `https://api.akuari.my.id/downloader/ytmp4?url=${encodeURIComponent(url)}`;
+          try {
+            const res = await fetch(apiUrl);
+            const json = await res.json();
+            if (json.status && json.result && json.result.url) {
+              const success = await sendMediaFromUrl(json.result.url, 'video', json.result.title + '.mp4');
+              await react(success ? '✅' : '❌');
+              if (!success) await sock.sendMessage(sender, { text: '❌ Gagal mengirim video.' });
+            } else {
+              await react('❌');
+              await sock.sendMessage(sender, { text: '❌ Gagal mendapatkan link download.' });
+            }
+          } catch (e) {
+            await react('❌');
+            await sock.sendMessage(sender, { text: '❌ Error saat menghubungi API.' });
+          }
+          break;
+        }
+
+        case 'ytsearch': {
+          const query = args.join(' ');
+          if (!query) {
+            await react('❌');
+            await sock.sendMessage(sender, { text: getCommandHelp('ytsearch') });
+            return;
+          }
+          await react('⏳');
+          const apiUrl = `https://api.akuari.my.id/search/yt?query=${encodeURIComponent(query)}`;
+          try {
+            const res = await fetch(apiUrl);
+            const json = await res.json();
+            if (json.status && json.result && json.result.length > 0) {
+              let text = `🔍 *Hasil Pencarian:* ${query}\n\n`;
+              json.result.slice(0, 5).forEach((v, i) => {
+                text += `${i+1}. *${v.title}*\n   ⏱️ ${v.duration} | 👁️ ${v.views}\n   🔗 ${v.url}\n\n`;
+              });
+              await sock.sendMessage(sender, { text });
+              await react('✅');
+            } else {
+              await react('❌');
+              await sock.sendMessage(sender, { text: '❌ Tidak ditemukan.' });
+            }
+          } catch (e) {
+            await react('❌');
+            await sock.sendMessage(sender, { text: '❌ Error API.' });
           }
           break;
         }
