@@ -1,5 +1,5 @@
 {
-  "name": "bot-wangz",
+  "name": "bot-wa",
   "version": "6.6.6",
   "description": "BOT WANGZ - WhatsApp Bot Pairing Code, Anti Delay",
   "main": "index.js",
@@ -7,7 +7,7 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "github:RulzzOfficiaL/baileysrulzz",
+    "@whiskeysockets/baileys": "^6.6.0",
     "pino": "^8.17.2",
     "fs-extra": "^11.2.0"
   }
