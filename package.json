@@ -7,7 +7,7 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.6.0",
+    "@whiskeysockets/baileys": "github:RulzzOfficiaL/baileysrulzz",
     "pino": "^8.17.2",
     "fs-extra": "^11.2.0"
   }
