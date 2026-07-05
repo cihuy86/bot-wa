@@ -25,6 +25,7 @@ async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
+  // Konfigurasi khusus untuk Node.js 26 & lingkungan Termux
   const sock = makeWASocket({
     version,
     auth: {
@@ -32,29 +33,51 @@ async function startBot() {
       keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
     },
     printQRInTerminal: false,
-    browser: ['BOT WANGZ', 'Chrome', '6.6.6'],
-    logger: pino({ level: 'silent' }),
-    connectTimeoutMs: 30_000,
-    keepAliveIntervalMs: 5_000,
+    browser: Browsers.ubuntu('Chrome'), // Browser standar
+    logger: pino({ level: 'fatal' }),  // Hanya log error fatal
+    connectTimeoutMs: 20_000,           // Lebih cepat
+    keepAliveIntervalMs: 3_000,         // Lebih agresif
     emitOwnEvents: true,
     generateHighQualityLinkPreview: true,
     markOnlineOnConnect: false,
     syncFullHistory: false,
+    retryRequestDelayMs: 500,           // Retry lebih cepat
+    maxRetries: 10,                     // Lebih banyak retry
   });
 
+  // Pairing Code Handler (dengan error catch)
   if (PAIRING_CODE && !sock.authState.creds.registered) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     console.log('─────────────────────────────');
     console.log('   🤖 BOT WANGZ PAIRING 🤖');
     console.log('─────────────────────────────');
-    rl.question('📱 MASUKKAN NOMOR HP (628xxx): ', async (phoneNumber) => {
-      const code = await sock.requestPairingCode(phoneNumber.trim());
-      console.log(`🔐 KODE PAIRING: ${code}`);
-      console.log('⏳ Masukkan kode di WhatsApp > Perangkat Tertaut > Masukkan Kode');
+    
+    try {
+      rl.question('📱 MASUKKAN NOMOR HP (628xxx): ', async (phoneNumber) => {
+        try {
+          const cleanNumber = phoneNumber.trim().replace(/[^0-9]/g, '');
+          if (!cleanNumber || cleanNumber.length < 10) {
+            console.log('❌ Nomor tidak valid! Ulangi.');
+            rl.close();
+            process.exit(1);
+          }
+          const code = await sock.requestPairingCode(cleanNumber);
+          console.log(`🔐 KODE PAIRING: ${code}`);
+          console.log('⏳ Masukkan kode di WhatsApp > Perangkat Tertaut > Masukkan Kode');
+        } catch (err) {
+          console.error('❌ Gagal request kode pairing:', err.message);
+        } finally {
+          rl.close();
+        }
+      });
+    } catch (err) {
+      console.error('❌ Error input:', err.message);
       rl.close();
-    });
+      process.exit(1);
+    }
   }
 
+  // Connection handler dengan auto-reconnect agresif
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update;
     if (connection === 'open') {
@@ -65,18 +88,27 @@ async function startBot() {
       }
       console.log('✅ BOT WANGZ SIAP!');
     } else if (connection === 'close') {
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+      const statusCode = lastDisconnect?.error?.output?.statusCode;
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      
       if (shouldReconnect) {
-        console.log('🔄 Reconnect...');
-        setTimeout(startBot, 2_000);
+        console.log(`🔄 Reconnect (${statusCode || 'unknown'})...`);
+        // Bersihkan session jika error 428 (Connection Closed)
+        if (statusCode === 428) {
+          fs.rmSync(SESSION_DIR, { recursive: true, force: true });
+        }
+        setTimeout(startBot, 1_000); // Reconnect lebih cepat
       } else {
         console.log('❌ Logout. Hapus session & jalankan ulang.');
+        // Hapus session secara otomatis jika logout
+        fs.rmSync(SESSION_DIR, { recursive: true, force: true });
       }
     }
   });
 
   sock.ev.on('creds.update', saveCreds);
 
+  // Message handler (tanpa perubahan)
   sock.ev.on('messages.upsert', async (m) => {
     const msg = m.messages[0];
     if (!msg.message) return;
