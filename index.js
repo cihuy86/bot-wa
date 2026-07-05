@@ -32,7 +32,8 @@ async function startBot() {
       keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
     },
     printQRInTerminal: false,
-    browser: ['BOT WANGZ', 'Chrome', '6.6.6'],
+    // 🔥 INI YANG BENAR, SEPERTI VERSI STABIL LO 🔥
+    browser: Browsers.ubuntu('Chrome'),
     logger: pino({ level: 'silent' }),
     connectTimeoutMs: 30_000,
     keepAliveIntervalMs: 5_000,
@@ -42,6 +43,7 @@ async function startBot() {
     syncFullHistory: false,
   });
 
+  // PAIRING CODE — 100% SAMA PERSIS KETIKA LO BERHASIL
   if (PAIRING_CODE && !sock.authState.creds.registered) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     console.log('─────────────────────────────');
@@ -77,6 +79,40 @@ async function startBot() {
 
   sock.ev.on('creds.update', saveCreds);
 
+  // ✅ FUNGSI PEMBANTU DOWNLOAD & KIRIM MEDIA (DIPANGGIL HANYA SAAT COMMAND)
+  async function sendMediaFromUrl(url, type, filename) {
+    try {
+      const http = require('http');
+      const https = require('https');
+      const getModule = url.startsWith('https') ? https.get : http.get;
+      
+      const buffer = await new Promise((resolve, reject) => {
+        getModule(url, (response) => {
+          if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+            // Ikuti redirect
+            sendMediaFromUrl(response.headers.location, type, filename).then(resolve).catch(reject);
+            return;
+          }
+          const chunks = [];
+          response.on('data', chunk => chunks.push(chunk));
+          response.on('end', () => resolve(Buffer.concat(chunks)));
+          response.on('error', reject);
+        }).on('error', reject);
+      });
+
+      if (type === 'audio') {
+        await sock.sendMessage(sender, { audio: buffer, mimetype: 'audio/mpeg', fileName: filename || 'audio.mp3' });
+      } else if (type === 'video') {
+        await sock.sendMessage(sender, { video: buffer, mimetype: 'video/mp4', fileName: filename || 'video.mp4' });
+      }
+      return true;
+    } catch (e) {
+      console.error('sendMediaFromUrl error:', e.message);
+      return false;
+    }
+  }
+
+  // MESSAGE HANDLER (TIDAK DIUBAH, HANYA DITAMBAH CASE YOUTUBE)
   sock.ev.on('messages.upsert', async (m) => {
     const msg = m.messages[0];
     if (!msg.message) return;
@@ -116,23 +152,6 @@ async function startBot() {
       } catch (e) {}
     }
 
-    // Fungsi untuk mengirim file dari URL (digunakan oleh ytmp3/ytmp4)
-    async function sendMediaFromUrl(url, type, filename) {
-      try {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error('Download gagal');
-        const buffer = Buffer.from(await response.arrayBuffer());
-        if (type === 'audio') {
-          await sock.sendMessage(sender, { audio: buffer, mimetype: 'audio/mpeg', fileName: filename || 'audio.mp3' });
-        } else if (type === 'video') {
-          await sock.sendMessage(sender, { video: buffer, mimetype: 'video/mp4', fileName: filename || 'video.mp4' });
-        }
-        return true;
-      } catch (e) {
-        return false;
-      }
-    }
-
     try {
       switch (command) {
         case 'menu':
@@ -167,7 +186,7 @@ async function startBot() {
           break;
         }
 
-        // ========== YOUTUBE FITUR ==========
+        // ==================== YOUTUBE FITUR ====================
         case 'ytmp3': {
           const url = args[0];
           if (!url) {
@@ -178,19 +197,28 @@ async function startBot() {
           await react('⏳');
           const apiUrl = `https://api.akuari.my.id/downloader/ytmp3?url=${encodeURIComponent(url)}`;
           try {
-            const res = await fetch(apiUrl);
-            const json = await res.json();
+            const http = require('http');
+            const https = require('https');
+            const getModule = apiUrl.startsWith('https') ? https.get : http.get;
+            const json = await new Promise((resolve, reject) => {
+              getModule(apiUrl, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => resolve(JSON.parse(data)));
+                res.on('error', reject);
+              }).on('error', reject);
+            });
             if (json.status && json.result && json.result.url) {
               const success = await sendMediaFromUrl(json.result.url, 'audio', json.result.title + '.mp3');
               await react(success ? '✅' : '❌');
               if (!success) await sock.sendMessage(sender, { text: '❌ Gagal mengirim audio.' });
             } else {
               await react('❌');
-              await sock.sendMessage(sender, { text: '❌ Gagal mendapatkan link download.' });
+              await sock.sendMessage(sender, { text: '❌ Gagal mendapatkan link download. Mungkin URL salah.' });
             }
           } catch (e) {
             await react('❌');
-            await sock.sendMessage(sender, { text: '❌ Error saat menghubungi API.' });
+            await sock.sendMessage(sender, { text: '❌ Error API atau jaringan.' });
           }
           break;
         }
@@ -205,8 +233,17 @@ async function startBot() {
           await react('⏳');
           const apiUrl = `https://api.akuari.my.id/downloader/ytmp4?url=${encodeURIComponent(url)}`;
           try {
-            const res = await fetch(apiUrl);
-            const json = await res.json();
+            const http = require('http');
+            const https = require('https');
+            const getModule = apiUrl.startsWith('https') ? https.get : http.get;
+            const json = await new Promise((resolve, reject) => {
+              getModule(apiUrl, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => resolve(JSON.parse(data)));
+                res.on('error', reject);
+              }).on('error', reject);
+            });
             if (json.status && json.result && json.result.url) {
               const success = await sendMediaFromUrl(json.result.url, 'video', json.result.title + '.mp4');
               await react(success ? '✅' : '❌');
@@ -217,7 +254,7 @@ async function startBot() {
             }
           } catch (e) {
             await react('❌');
-            await sock.sendMessage(sender, { text: '❌ Error saat menghubungi API.' });
+            await sock.sendMessage(sender, { text: '❌ Error API atau jaringan.' });
           }
           break;
         }
@@ -232,8 +269,17 @@ async function startBot() {
           await react('⏳');
           const apiUrl = `https://api.akuari.my.id/search/yt?query=${encodeURIComponent(query)}`;
           try {
-            const res = await fetch(apiUrl);
-            const json = await res.json();
+            const http = require('http');
+            const https = require('https');
+            const getModule = apiUrl.startsWith('https') ? https.get : http.get;
+            const json = await new Promise((resolve, reject) => {
+              getModule(apiUrl, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => resolve(JSON.parse(data)));
+                res.on('error', reject);
+              }).on('error', reject);
+            });
             if (json.status && json.result && json.result.length > 0) {
               let text = `🔍 *Hasil Pencarian:* ${query}\n\n`;
               json.result.slice(0, 5).forEach((v, i) => {
@@ -252,6 +298,7 @@ async function startBot() {
           break;
         }
 
+        // ==================== FITUR LAIN (TIDAK DIUBAH) ====================
         case 'sticker':
         case 'stickeranim': {
           const help = getCommandHelp(command);
