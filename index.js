@@ -11,6 +11,8 @@ const {
 const pino = require('pino');
 const fs = require('fs-extra');
 const path = require('path');
+const https = require('https');
+const http = require('http');
 const { getGroupConfig, setGroupConfig } = require('./lib/database');
 const { menuText, getCommandHelp } = require('./lib/functions');
 const { isOwner, addOwner, removeOwner, setMode, getMode, readSettings } = require('./lib/settings');
@@ -19,12 +21,62 @@ const readline = require('readline');
 const SESSION_DIR = './session';
 const PAIRING_CODE = true;
 
+// ==================== FUNGSI FETCH JSON (ANTI CRASH) ====================
+function fetchJson(url, timeout = 15000) {
+  return new Promise((resolve, reject) => {
+    const getModule = url.startsWith('https') ? https.get : http.get;
+    const req = getModule(url, { timeout }, (res) => {
+      const contentType = res.headers['content-type'] || '';
+      if (!contentType.includes('application/json')) {
+        req.destroy();
+        reject(new Error('Respons bukan JSON, mungkin API sedang down'));
+        return;
+      }
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          reject(new Error('Gagal parse JSON'));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Timeout'));
+    });
+  });
+}
+
+// ==================== FUNGSI DOWNLOAD BUFFER ====================
+function downloadMediaBuffer(url) {
+  return new Promise((resolve, reject) => {
+    const getModule = url.startsWith('https') ? https.get : http.get;
+    getModule(url, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        downloadMediaBuffer(res.headers.location).then(resolve).catch(reject);
+        return;
+      }
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+      res.on('error', reject);
+    }).on('error', reject);
+  });
+}
+
+// ==================== START BOT ====================
 async function startBot() {
+  // Buat folder session jika belum ada
   if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR);
 
+  // Auth state
   const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
+  // Konfigurasi socket
   const sock = makeWASocket({
     version,
     auth: {
@@ -32,7 +84,6 @@ async function startBot() {
       keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
     },
     printQRInTerminal: false,
-    // 🔥 INI YANG BENAR, SEPERTI VERSI STABIL LO 🔥
     browser: Browsers.ubuntu('Chrome'),
     logger: pino({ level: 'silent' }),
     connectTimeoutMs: 30_000,
@@ -43,80 +94,67 @@ async function startBot() {
     syncFullHistory: false,
   });
 
-  // PAIRING CODE — 100% SAMA PERSIS KETIKA LO BERHASIL
+  // ==================== PAIRING CODE HANDLER ====================
   if (PAIRING_CODE && !sock.authState.creds.registered) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     console.log('─────────────────────────────');
     console.log('   🤖 BOT WANGZ PAIRING 🤖');
     console.log('─────────────────────────────');
     rl.question('📱 MASUKKAN NOMOR HP (628xxx): ', async (phoneNumber) => {
-      const code = await sock.requestPairingCode(phoneNumber.trim());
-      console.log(`🔐 KODE PAIRING: ${code}`);
-      console.log('⏳ Masukkan kode di WhatsApp > Perangkat Tertaut > Masukkan Kode');
-      rl.close();
+      try {
+        const cleanNumber = phoneNumber.trim().replace(/[^0-9]/g, '');
+        if (!cleanNumber || cleanNumber.length < 10) {
+          console.log('❌ Nomor tidak valid! Ulangi.');
+          rl.close();
+          process.exit(1);
+        }
+        const code = await sock.requestPairingCode(cleanNumber);
+        console.log(`🔐 KODE PAIRING: ${code}`);
+        console.log('⏳ Masukkan kode di WhatsApp > Perangkat Tertaut > Masukkan Kode');
+      } catch (err) {
+        console.error('❌ Gagal request kode pairing:', err.message);
+      } finally {
+        rl.close();
+      }
     });
   }
 
+  // ==================== CONNECTION UPDATE HANDLER ====================
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update;
     if (connection === 'open') {
       const myJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
       if (!isOwner(myJid)) {
         addOwner(myJid);
-        console.log(`👑 Owner: ${myJid.split('@')[0]}`);
+        console.log(`👑 Owner otomatis: ${myJid.split('@')[0]}`);
       }
       console.log('✅ BOT WANGZ SIAP!');
     } else if (connection === 'close') {
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+      const statusCode = lastDisconnect?.error?.output?.statusCode;
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       if (shouldReconnect) {
-        console.log('🔄 Reconnect...');
-        setTimeout(startBot, 2_000);
+        console.log(`🔄 Koneksi terputus (${statusCode || 'unknown'}), reconnect dalam 2 detik...`);
+        // Hapus session jika error 428 (Connection Closed)
+        if (statusCode === 428) {
+          fs.rmSync(SESSION_DIR, { recursive: true, force: true });
+        }
+        setTimeout(startBot, 2000);
       } else {
-        console.log('❌ Logout. Hapus session & jalankan ulang.');
+        console.log('❌ Logout terdeteksi. Hapus folder session & jalankan ulang.');
+        fs.rmSync(SESSION_DIR, { recursive: true, force: true });
       }
     }
   });
 
+  // Simpan credential secara otomatis
   sock.ev.on('creds.update', saveCreds);
 
-  // ✅ FUNGSI PEMBANTU DOWNLOAD & KIRIM MEDIA (DIPANGGIL HANYA SAAT COMMAND)
-  async function sendMediaFromUrl(url, type, filename) {
-    try {
-      const http = require('http');
-      const https = require('https');
-      const getModule = url.startsWith('https') ? https.get : http.get;
-      
-      const buffer = await new Promise((resolve, reject) => {
-        getModule(url, (response) => {
-          if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-            // Ikuti redirect
-            sendMediaFromUrl(response.headers.location, type, filename).then(resolve).catch(reject);
-            return;
-          }
-          const chunks = [];
-          response.on('data', chunk => chunks.push(chunk));
-          response.on('end', () => resolve(Buffer.concat(chunks)));
-          response.on('error', reject);
-        }).on('error', reject);
-      });
-
-      if (type === 'audio') {
-        await sock.sendMessage(sender, { audio: buffer, mimetype: 'audio/mpeg', fileName: filename || 'audio.mp3' });
-      } else if (type === 'video') {
-        await sock.sendMessage(sender, { video: buffer, mimetype: 'video/mp4', fileName: filename || 'video.mp4' });
-      }
-      return true;
-    } catch (e) {
-      console.error('sendMediaFromUrl error:', e.message);
-      return false;
-    }
-  }
-
-  // MESSAGE HANDLER (TIDAK DIUBAH, HANYA DITAMBAH CASE YOUTUBE)
+  // ==================== MESSAGE HANDLER ====================
   sock.ev.on('messages.upsert', async (m) => {
     const msg = m.messages[0];
     if (!msg.message) return;
 
+    // Ambil teks dari berbagai tipe pesan
     const type = Object.keys(msg.message)[0];
     const body =
       type === 'conversation' ? msg.message.conversation :
@@ -131,6 +169,7 @@ async function startBot() {
     const args = body.slice(prefix.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
+    // Data pengirim & grup
     const sender = msg.key.remoteJid;
     const isFromMe = msg.key.fromMe || false;
     const pushname = msg.pushName || (isFromMe ? 'Owner' : 'User');
@@ -141,19 +180,25 @@ async function startBot() {
     const myJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
     const isBotAdmin = isGroup ? groupAdmins.includes(myJid) : false;
 
+    // Mode & owner
     const currentMode = getMode();
     const senderIsOwner = isOwner(sender) || isFromMe;
 
+    // Mode self: abaikan jika bukan owner
     if (currentMode === 'self' && !senderIsOwner) return;
 
+    // Fungsi reaction
     async function react(emoji) {
       try {
         await sock.sendMessage(sender, { react: { text: emoji, key: msg.key } });
       } catch (e) {}
     }
 
+    // ==================== COMMAND HANDLER ====================
     try {
       switch (command) {
+
+        // ---------- MENU & UMUM ----------
         case 'menu':
           await sock.sendMessage(sender, { text: menuText(pushname, senderIsOwner, sender) }, { quoted: msg });
           await react('✅');
@@ -186,7 +231,7 @@ async function startBot() {
           break;
         }
 
-        // ==================== YOUTUBE FITUR ====================
+        // ---------- YOUTUBE FITUR ----------
         case 'ytmp3': {
           const url = args[0];
           if (!url) {
@@ -195,30 +240,23 @@ async function startBot() {
             return;
           }
           await react('⏳');
-          const apiUrl = `https://api.akuari.my.id/downloader/ytmp3?url=${encodeURIComponent(url)}`;
           try {
-            const http = require('http');
-            const https = require('https');
-            const getModule = apiUrl.startsWith('https') ? https.get : http.get;
-            const json = await new Promise((resolve, reject) => {
-              getModule(apiUrl, (res) => {
-                let data = '';
-                res.on('data', chunk => data += chunk);
-                res.on('end', () => resolve(JSON.parse(data)));
-                res.on('error', reject);
-              }).on('error', reject);
-            });
+            const apiUrl = `https://api.akuari.my.id/downloader/ytmp3?url=${encodeURIComponent(url)}`;
+            const json = await fetchJson(apiUrl);
             if (json.status && json.result && json.result.url) {
-              const success = await sendMediaFromUrl(json.result.url, 'audio', json.result.title + '.mp3');
-              await react(success ? '✅' : '❌');
-              if (!success) await sock.sendMessage(sender, { text: '❌ Gagal mengirim audio.' });
+              const buffer = await downloadMediaBuffer(json.result.url);
+              await sock.sendMessage(sender, {
+                audio: buffer,
+                mimetype: 'audio/mpeg',
+                fileName: (json.result.title || 'audio') + '.mp3'
+              });
+              await react('✅');
             } else {
-              await react('❌');
-              await sock.sendMessage(sender, { text: '❌ Gagal mendapatkan link download. Mungkin URL salah.' });
+              throw new Error('URL tidak ditemukan');
             }
           } catch (e) {
             await react('❌');
-            await sock.sendMessage(sender, { text: '❌ Error API atau jaringan.' });
+            await sock.sendMessage(sender, { text: '❌ Gagal download MP3. Pastikan URL valid & coba lagi nanti.' });
           }
           break;
         }
@@ -231,30 +269,23 @@ async function startBot() {
             return;
           }
           await react('⏳');
-          const apiUrl = `https://api.akuari.my.id/downloader/ytmp4?url=${encodeURIComponent(url)}`;
           try {
-            const http = require('http');
-            const https = require('https');
-            const getModule = apiUrl.startsWith('https') ? https.get : http.get;
-            const json = await new Promise((resolve, reject) => {
-              getModule(apiUrl, (res) => {
-                let data = '';
-                res.on('data', chunk => data += chunk);
-                res.on('end', () => resolve(JSON.parse(data)));
-                res.on('error', reject);
-              }).on('error', reject);
-            });
+            const apiUrl = `https://api.akuari.my.id/downloader/ytmp4?url=${encodeURIComponent(url)}`;
+            const json = await fetchJson(apiUrl);
             if (json.status && json.result && json.result.url) {
-              const success = await sendMediaFromUrl(json.result.url, 'video', json.result.title + '.mp4');
-              await react(success ? '✅' : '❌');
-              if (!success) await sock.sendMessage(sender, { text: '❌ Gagal mengirim video.' });
+              const buffer = await downloadMediaBuffer(json.result.url);
+              await sock.sendMessage(sender, {
+                video: buffer,
+                mimetype: 'video/mp4',
+                fileName: (json.result.title || 'video') + '.mp4'
+              });
+              await react('✅');
             } else {
-              await react('❌');
-              await sock.sendMessage(sender, { text: '❌ Gagal mendapatkan link download.' });
+              throw new Error('URL tidak ditemukan');
             }
           } catch (e) {
             await react('❌');
-            await sock.sendMessage(sender, { text: '❌ Error API atau jaringan.' });
+            await sock.sendMessage(sender, { text: '❌ Gagal download MP4. Pastikan URL valid & coba lagi nanti.' });
           }
           break;
         }
@@ -267,38 +298,27 @@ async function startBot() {
             return;
           }
           await react('⏳');
-          const apiUrl = `https://api.akuari.my.id/search/yt?query=${encodeURIComponent(query)}`;
           try {
-            const http = require('http');
-            const https = require('https');
-            const getModule = apiUrl.startsWith('https') ? https.get : http.get;
-            const json = await new Promise((resolve, reject) => {
-              getModule(apiUrl, (res) => {
-                let data = '';
-                res.on('data', chunk => data += chunk);
-                res.on('end', () => resolve(JSON.parse(data)));
-                res.on('error', reject);
-              }).on('error', reject);
-            });
+            const apiUrl = `https://api.akuari.my.id/search/yt?query=${encodeURIComponent(query)}`;
+            const json = await fetchJson(apiUrl);
             if (json.status && json.result && json.result.length > 0) {
               let text = `🔍 *Hasil Pencarian:* ${query}\n\n`;
               json.result.slice(0, 5).forEach((v, i) => {
-                text += `${i+1}. *${v.title}*\n   ⏱️ ${v.duration} | 👁️ ${v.views}\n   🔗 ${v.url}\n\n`;
+                text += `${i + 1}. *${v.title}*\n   ⏱️ ${v.duration} | 👁️ ${v.views}\n   🔗 ${v.url}\n\n`;
               });
               await sock.sendMessage(sender, { text });
               await react('✅');
             } else {
-              await react('❌');
-              await sock.sendMessage(sender, { text: '❌ Tidak ditemukan.' });
+              throw new Error('Tidak ditemukan');
             }
           } catch (e) {
             await react('❌');
-            await sock.sendMessage(sender, { text: '❌ Error API.' });
+            await sock.sendMessage(sender, { text: '❌ Gagal mencari video. Coba lagi nanti.' });
           }
           break;
         }
 
-        // ==================== FITUR LAIN (TIDAK DIUBAH) ====================
+        // ---------- STIKER & MEDIA ----------
         case 'sticker':
         case 'stickeranim': {
           const help = getCommandHelp(command);
@@ -308,18 +328,52 @@ async function startBot() {
             await sock.sendMessage(sender, { text: help || 'Balas gambar/video!' });
             return;
           }
+
           const mediaType = quoted.imageMessage ? 'image' : quoted.videoMessage ? 'video' : null;
           if (!mediaType) {
             await react('❌');
             await sock.sendMessage(sender, { text: help || 'Media tidak didukung!' });
             return;
           }
+
           await react('⏳');
-          const stream = await downloadContentFromMessage(quoted[mediaType + 'Message'], mediaType);
-          let buffer = Buffer.from([]);
-          for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-          await sock.sendMessage(sender, { sticker: buffer, pack: 'BOT WANGZ', author: 'Wangz' });
-          await react('✅');
+
+          try {
+            // Coba buat stiker dari media lokal
+            const stream = await downloadContentFromMessage(quoted[mediaType + 'Message'], mediaType);
+            let buffer = Buffer.from([]);
+            for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+
+            if (!buffer || buffer.length < 1024) {
+              throw new Error('Buffer terlalu kecil');
+            }
+
+            // Kirim stiker (tanpa metadata agar tidak korup)
+            await sock.sendMessage(sender, { sticker: buffer });
+            await react('✅');
+          } catch (localError) {
+            console.error('Gagal buat stiker lokal:', localError.message);
+
+            // Fallback ke API stiker online
+            try {
+              const mediaUrl = quoted.imageMessage?.url || quoted.videoMessage?.url;
+              if (!mediaUrl) throw new Error('Tidak ada URL media');
+
+              const apiSticker = `https://api.zahwazein.xyz/creator/sticker?url=${encodeURIComponent(mediaUrl)}&apikey=free`;
+              const json = await fetchJson(apiSticker);
+              if (json.status && json.result?.url) {
+                const stickerBuffer = await downloadMediaBuffer(json.result.url);
+                await sock.sendMessage(sender, { sticker: stickerBuffer });
+                await react('✅');
+              } else {
+                throw new Error('API sticker gagal');
+              }
+            } catch (fallbackError) {
+              console.error('Fallback sticker gagal:', fallbackError.message);
+              await react('❌');
+              await sock.sendMessage(sender, { text: '❌ Gagal membuat stiker. Coba lagi dengan gambar/video lain.' });
+            }
+          }
           break;
         }
 
@@ -340,8 +394,9 @@ async function startBot() {
           break;
         }
 
+        // ---------- GROUP COMMANDS ----------
         case 'hidetag':
-          if (!isGroup) { await react('❌'); await sock.sendMessage(sender, { text: 'Grup only!' }); return; }
+          if (!isGroup) { await react('❌'); await sock.sendMessage(sender, { text: 'Perintah khusus grup!' }); return; }
           if (!isAdmin && !isFromMe) { await react('❌'); return; }
           await sock.sendMessage(sender, { text: args.join(' ') || 'Hidetag', mentions: groupMetadata.participants.map(p => p.id) });
           await react('✅');
@@ -397,6 +452,7 @@ async function startBot() {
           await react('✅');
           break;
 
+        // ---------- SECURITY ----------
         case 'antilink': {
           const help = getCommandHelp(command);
           if (!isGroup || (!isAdmin && !isFromMe)) { await react('❌'); return; }
@@ -451,9 +507,10 @@ async function startBot() {
           break;
         }
 
+        // ---------- OWNER & OTHER ----------
         case 'totaluser': {
           const chats = await sock.fetchAllWhatsAppContacts();
-          await sock.sendMessage(sender, { text: `Total: ${chats.length} chat` });
+          await sock.sendMessage(sender, { text: `Total chat: ${chats.length}` });
           await react('✅');
           break;
         }
@@ -533,7 +590,9 @@ async function startBot() {
           break;
         }
 
+        // ---------- DEFAULT ----------
         default: {
+          // Antilink (grup)
           if (isGroup && body.includes('https://')) {
             const conf = getGroupConfig(sender);
             if (conf.antilink && isBotAdmin && !isAdmin && !isFromMe) {
@@ -551,4 +610,5 @@ async function startBot() {
   return sock;
 }
 
+// Jalankan bot
 startBot().catch(err => console.error('Fatal:', err));
