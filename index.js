@@ -69,14 +69,11 @@ function downloadMediaBuffer(url) {
 
 // ==================== START BOT ====================
 async function startBot() {
-  // Buat folder session jika belum ada
   if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR);
 
-  // Auth state
   const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
-  // Konfigurasi socket
   const sock = makeWASocket({
     version,
     auth: {
@@ -94,7 +91,7 @@ async function startBot() {
     syncFullHistory: false,
   });
 
-  // ==================== PAIRING CODE HANDLER ====================
+  // ==================== PAIRING CODE ====================
   if (PAIRING_CODE && !sock.authState.creds.registered) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     console.log('─────────────────────────────');
@@ -104,7 +101,7 @@ async function startBot() {
       try {
         const cleanNumber = phoneNumber.trim().replace(/[^0-9]/g, '');
         if (!cleanNumber || cleanNumber.length < 10) {
-          console.log('❌ Nomor tidak valid! Ulangi.');
+          console.log('❌ Nomor tidak valid!');
           rl.close();
           process.exit(1);
         }
@@ -112,55 +109,47 @@ async function startBot() {
         console.log(`🔐 KODE PAIRING: ${code}`);
         console.log('⏳ Masukkan kode di WhatsApp > Perangkat Tertaut > Masukkan Kode');
       } catch (err) {
-        console.error('❌ Gagal request kode pairing:', err.message);
+        console.error('❌ Gagal request kode:', err.message);
       } finally {
         rl.close();
       }
     });
   }
 
-  // ==================== CONNECTION UPDATE HANDLER ====================
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update;
     if (connection === 'open') {
       const myJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
       if (!isOwner(myJid)) {
         addOwner(myJid);
-        console.log(`👑 Owner otomatis: ${myJid.split('@')[0]}`);
+        console.log(`👑 Owner: ${myJid.split('@')[0]}`);
       }
       console.log('✅ BOT WANGZ SIAP!');
     } else if (connection === 'close') {
-      const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      if (shouldReconnect) {
-        console.log(`🔄 Koneksi terputus (${statusCode || 'unknown'}), reconnect dalam 2 detik...`);
-        // Hapus session jika error 428 (Connection Closed)
-        if (statusCode === 428) {
-          fs.rmSync(SESSION_DIR, { recursive: true, force: true });
-        }
+      const code = lastDisconnect?.error?.output?.statusCode;
+      if (code !== DisconnectReason.loggedOut) {
+        console.log('🔄 Reconnect...');
+        if (code === 428) fs.rmSync(SESSION_DIR, { recursive: true, force: true });
         setTimeout(startBot, 2000);
       } else {
-        console.log('❌ Logout terdeteksi. Hapus folder session & jalankan ulang.');
+        console.log('❌ Logout. Hapus session & ulangi.');
         fs.rmSync(SESSION_DIR, { recursive: true, force: true });
       }
     }
   });
 
-  // Simpan credential secara otomatis
   sock.ev.on('creds.update', saveCreds);
 
-  // ==================== MESSAGE HANDLER ====================
   sock.ev.on('messages.upsert', async (m) => {
     const msg = m.messages[0];
     if (!msg.message) return;
 
-    // Ambil teks dari berbagai tipe pesan
     const type = Object.keys(msg.message)[0];
     const body =
       type === 'conversation' ? msg.message.conversation :
       type === 'extendedTextMessage' ? msg.message.extendedTextMessage.text :
-      type === 'imageMessage' ? msg.message.imageMessage.caption :
-      type === 'videoMessage' ? msg.message.videoMessage.caption : '';
+      type === 'imageMessage' ? (msg.message.imageMessage?.caption || '') :
+      type === 'videoMessage' ? (msg.message.videoMessage?.caption || '') : '';
     if (!body) return;
 
     const prefix = '.';
@@ -169,7 +158,6 @@ async function startBot() {
     const args = body.slice(prefix.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
-    // Data pengirim & grup
     const sender = msg.key.remoteJid;
     const isFromMe = msg.key.fromMe || false;
     const pushname = msg.pushName || (isFromMe ? 'Owner' : 'User');
@@ -180,25 +168,17 @@ async function startBot() {
     const myJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
     const isBotAdmin = isGroup ? groupAdmins.includes(myJid) : false;
 
-    // Mode & owner
     const currentMode = getMode();
     const senderIsOwner = isOwner(sender) || isFromMe;
-
-    // Mode self: abaikan jika bukan owner
     if (currentMode === 'self' && !senderIsOwner) return;
 
-    // Fungsi reaction
     async function react(emoji) {
-      try {
-        await sock.sendMessage(sender, { react: { text: emoji, key: msg.key } });
-      } catch (e) {}
+      try { await sock.sendMessage(sender, { react: { text: emoji, key: msg.key } }); } catch (e) {}
     }
 
-    // ==================== COMMAND HANDLER ====================
     try {
       switch (command) {
 
-        // ---------- MENU & UMUM ----------
         case 'menu':
           await sock.sendMessage(sender, { text: menuText(pushname, senderIsOwner, sender) }, { quoted: msg });
           await react('✅');
@@ -206,7 +186,7 @@ async function startBot() {
 
         case 'ping': {
           const start = Date.now();
-          await sock.sendMessage(sender, { text: `⚡ Respon: ${Date.now() - start} ms` });
+          await sock.sendMessage(sender, { text: `⚡ ${Date.now() - start} ms` });
           await react('✅');
           break;
         }
@@ -217,161 +197,128 @@ async function startBot() {
           break;
 
         case 'info':
-          await sock.sendMessage(sender, { text: `🤖 *INFO BOT WANGZ*\nNama: BOT WANGZ\nVersi: 6.6.6\nLibrary: Baileys\nMode: Anti Delay` });
+          await sock.sendMessage(sender, { text: `🤖 *INFO BOT WANGZ*\nNama: BOT WANGZ\nVersi: 6.6.6\nLibrary: Baileys` });
           await react('✅');
           break;
 
         case 'runtime': {
-          const uptime = process.uptime();
-          const h = Math.floor(uptime / 3600);
-          const m = Math.floor((uptime % 3600) / 60);
-          const s = Math.floor(uptime % 60);
-          await sock.sendMessage(sender, { text: `⏱️ *RUNTIME:* ${h}j ${m}m ${s}d` });
+          const u = process.uptime();
+          const h = Math.floor(u / 3600), m = Math.floor((u % 3600) / 60), s = Math.floor(u % 60);
+          await sock.sendMessage(sender, { text: `⏱️ ${h}j ${m}m ${s}d` });
           await react('✅');
           break;
         }
 
-        // ---------- YOUTUBE FITUR ----------
+        // ==================== YOUTUBE ====================
         case 'ytmp3': {
           const url = args[0];
-          if (!url) {
-            await react('❌');
-            await sock.sendMessage(sender, { text: getCommandHelp('ytmp3') });
-            return;
-          }
+          if (!url) { await react('❌'); await sock.sendMessage(sender, { text: getCommandHelp('ytmp3') }); break; }
           await react('⏳');
           try {
-            const apiUrl = `https://api.akuari.my.id/downloader/ytmp3?url=${encodeURIComponent(url)}`;
-            const json = await fetchJson(apiUrl);
-            if (json.status && json.result && json.result.url) {
-              const buffer = await downloadMediaBuffer(json.result.url);
-              await sock.sendMessage(sender, {
-                audio: buffer,
-                mimetype: 'audio/mpeg',
-                fileName: (json.result.title || 'audio') + '.mp3'
-              });
+            const api = `https://api.akuari.my.id/downloader/ytmp3?url=${encodeURIComponent(url)}`;
+            const json = await fetchJson(api);
+            if (json.status && json.result?.url) {
+              const buf = await downloadMediaBuffer(json.result.url);
+              await sock.sendMessage(sender, { audio: buf, mimetype: 'audio/mpeg', fileName: (json.result.title||'audio')+'.mp3' });
               await react('✅');
-            } else {
-              throw new Error('URL tidak ditemukan');
-            }
-          } catch (e) {
-            await react('❌');
-            await sock.sendMessage(sender, { text: '❌ Gagal download MP3. Pastikan URL valid & coba lagi nanti.' });
-          }
+            } else throw new Error('Missing URL');
+          } catch (e) { await react('❌'); await sock.sendMessage(sender, { text: '❌ Gagal download MP3. Cek URL atau API down.' }); }
           break;
         }
 
         case 'ytmp4': {
           const url = args[0];
-          if (!url) {
-            await react('❌');
-            await sock.sendMessage(sender, { text: getCommandHelp('ytmp4') });
-            return;
-          }
+          if (!url) { await react('❌'); await sock.sendMessage(sender, { text: getCommandHelp('ytmp4') }); break; }
           await react('⏳');
           try {
-            const apiUrl = `https://api.akuari.my.id/downloader/ytmp4?url=${encodeURIComponent(url)}`;
-            const json = await fetchJson(apiUrl);
-            if (json.status && json.result && json.result.url) {
-              const buffer = await downloadMediaBuffer(json.result.url);
-              await sock.sendMessage(sender, {
-                video: buffer,
-                mimetype: 'video/mp4',
-                fileName: (json.result.title || 'video') + '.mp4'
-              });
+            const api = `https://api.akuari.my.id/downloader/ytmp4?url=${encodeURIComponent(url)}`;
+            const json = await fetchJson(api);
+            if (json.status && json.result?.url) {
+              const buf = await downloadMediaBuffer(json.result.url);
+              await sock.sendMessage(sender, { video: buf, mimetype: 'video/mp4', fileName: (json.result.title||'video')+'.mp4' });
               await react('✅');
-            } else {
-              throw new Error('URL tidak ditemukan');
-            }
-          } catch (e) {
-            await react('❌');
-            await sock.sendMessage(sender, { text: '❌ Gagal download MP4. Pastikan URL valid & coba lagi nanti.' });
-          }
+            } else throw new Error('Missing URL');
+          } catch (e) { await react('❌'); await sock.sendMessage(sender, { text: '❌ Gagal download MP4.' }); }
           break;
         }
 
         case 'ytsearch': {
           const query = args.join(' ');
-          if (!query) {
-            await react('❌');
-            await sock.sendMessage(sender, { text: getCommandHelp('ytsearch') });
-            return;
-          }
+          if (!query) { await react('❌'); await sock.sendMessage(sender, { text: getCommandHelp('ytsearch') }); break; }
           await react('⏳');
           try {
-            const apiUrl = `https://api.akuari.my.id/search/yt?query=${encodeURIComponent(query)}`;
-            const json = await fetchJson(apiUrl);
-            if (json.status && json.result && json.result.length > 0) {
-              let text = `🔍 *Hasil Pencarian:* ${query}\n\n`;
-              json.result.slice(0, 5).forEach((v, i) => {
-                text += `${i + 1}. *${v.title}*\n   ⏱️ ${v.duration} | 👁️ ${v.views}\n   🔗 ${v.url}\n\n`;
-              });
-              await sock.sendMessage(sender, { text });
+            const api = `https://api.akuari.my.id/search/yt?query=${encodeURIComponent(query)}`;
+            const json = await fetchJson(api);
+            if (json.status && json.result?.length) {
+              let txt = `🔍 *Hasil:* ${query}\n\n`;
+              json.result.slice(0,5).forEach((v,i) => txt += `${i+1}. *${v.title}*\n   ⏱️ ${v.duration} | 👁️ ${v.views}\n   🔗 ${v.url}\n\n`);
+              await sock.sendMessage(sender, { text: txt });
               await react('✅');
-            } else {
-              throw new Error('Tidak ditemukan');
-            }
-          } catch (e) {
-            await react('❌');
-            await sock.sendMessage(sender, { text: '❌ Gagal mencari video. Coba lagi nanti.' });
-          }
+            } else throw new Error('Kosong');
+          } catch (e) { await react('❌'); await sock.sendMessage(sender, { text: '❌ Gagal mencari.' }); }
           break;
         }
 
-        // ---------- STIKER & MEDIA ----------
+        // ==================== STIKER (BARU, BISA TANPA REPLY + WATERMARK FIQ) ====================
         case 'sticker':
         case 'stickeranim': {
-          const help = getCommandHelp(command);
-          const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-          if (!quoted) {
-            await react('❌');
-            await sock.sendMessage(sender, { text: help || 'Balas gambar/video!' });
-            return;
-          }
-
-          const mediaType = quoted.imageMessage ? 'image' : quoted.videoMessage ? 'video' : null;
-          if (!mediaType) {
-            await react('❌');
-            await sock.sendMessage(sender, { text: help || 'Media tidak didukung!' });
-            return;
-          }
-
           await react('⏳');
 
+          // Tentukan sumber media: dari reply atau dari pesan langsung (gambar/video dengan caption .sticker)
+          let mediaMessage = null;
+          let mediaType = null;
+
+          // Prioritas 1: reply mengandung gambar/video
+          const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+          if (quoted) {
+            if (quoted.imageMessage) { mediaMessage = quoted.imageMessage; mediaType = 'image'; }
+            else if (quoted.videoMessage) { mediaMessage = quoted.videoMessage; mediaType = 'video'; }
+          }
+
+          // Prioritas 2: pesan itu sendiri adalah gambar/video dengan caption .sticker (atau .stickeranim)
+          if (!mediaMessage && (type === 'imageMessage' || type === 'videoMessage')) {
+            mediaMessage = msg.message[type];
+            mediaType = type === 'imageMessage' ? 'image' : 'video';
+          }
+
+          if (!mediaMessage || !mediaType) {
+            await react('❌');
+            await sock.sendMessage(sender, { text: '📌 Balas gambar/video, atau kirim gambar/video dengan caption `.sticker`.' });
+            break;
+          }
+
           try {
-            // Coba buat stiker dari media lokal
-            const stream = await downloadContentFromMessage(quoted[mediaType + 'Message'], mediaType);
+            // Unduh buffer dari media WhatsApp
+            const stream = await downloadContentFromMessage(mediaMessage, mediaType);
             let buffer = Buffer.from([]);
             for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-            if (!buffer || buffer.length < 1024) {
-              throw new Error('Buffer terlalu kecil');
-            }
+            if (!buffer || buffer.length < 512) throw new Error('Buffer kosong');
 
-            // Kirim stiker (tanpa metadata agar tidak korup)
-            await sock.sendMessage(sender, { sticker: buffer });
+            // Kirim stiker dengan watermark "Fiq"
+            await sock.sendMessage(sender, {
+              sticker: buffer,
+              pack: 'Fiq',
+              author: 'Fiq'
+            });
             await react('✅');
-          } catch (localError) {
-            console.error('Gagal buat stiker lokal:', localError.message);
-
-            // Fallback ke API stiker online
+          } catch (localErr) {
+            console.error('Stiker lokal gagal:', localErr.message);
+            // Fallback ke API (tanpa watermark)
             try {
-              const mediaUrl = quoted.imageMessage?.url || quoted.videoMessage?.url;
-              if (!mediaUrl) throw new Error('Tidak ada URL media');
-
+              const mediaUrl = mediaMessage.url || mediaMessage.fileLength ? null : null;
+              // fallback hanya jika ada url (biasanya imageMessage/videoMessage punya url)
+              if (!mediaUrl) throw new Error('Tidak ada URL');
               const apiSticker = `https://api.zahwazein.xyz/creator/sticker?url=${encodeURIComponent(mediaUrl)}&apikey=free`;
               const json = await fetchJson(apiSticker);
               if (json.status && json.result?.url) {
-                const stickerBuffer = await downloadMediaBuffer(json.result.url);
-                await sock.sendMessage(sender, { sticker: stickerBuffer });
+                const buf = await downloadMediaBuffer(json.result.url);
+                await sock.sendMessage(sender, { sticker: buf, pack: 'Fiq', author: 'Fiq' });
                 await react('✅');
-              } else {
-                throw new Error('API sticker gagal');
-              }
-            } catch (fallbackError) {
-              console.error('Fallback sticker gagal:', fallbackError.message);
+              } else throw new Error('API gagal');
+            } catch (fallbackErr) {
               await react('❌');
-              await sock.sendMessage(sender, { text: '❌ Gagal membuat stiker. Coba lagi dengan gambar/video lain.' });
+              await sock.sendMessage(sender, { text: '❌ Gagal membuat stiker.' });
             }
           }
           break;
@@ -380,11 +327,7 @@ async function startBot() {
         case 'toimg': {
           const help = getCommandHelp(command);
           const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-          if (!quoted || !quoted.stickerMessage) {
-            await react('❌');
-            await sock.sendMessage(sender, { text: help || 'Balas stiker!' });
-            return;
-          }
+          if (!quoted?.stickerMessage) { await react('❌'); await sock.sendMessage(sender, { text: help || 'Balas stiker!' }); break; }
           await react('⏳');
           const stream = await downloadContentFromMessage(quoted.stickerMessage, 'image');
           let buffer = Buffer.from([]);
@@ -394,19 +337,18 @@ async function startBot() {
           break;
         }
 
-        // ---------- GROUP COMMANDS ----------
+        // ==================== GROUP ====================
         case 'hidetag':
-          if (!isGroup) { await react('❌'); await sock.sendMessage(sender, { text: 'Perintah khusus grup!' }); return; }
-          if (!isAdmin && !isFromMe) { await react('❌'); return; }
+          if (!isGroup) { await react('❌'); await sock.sendMessage(sender, { text: 'Grup only!' }); break; }
+          if (!isAdmin && !isFromMe) { await react('❌'); break; }
           await sock.sendMessage(sender, { text: args.join(' ') || 'Hidetag', mentions: groupMetadata.participants.map(p => p.id) });
           await react('✅');
           break;
 
         case 'promote': {
-          const help = getCommandHelp(command);
-          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); return; }
+          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); break; }
           const target = msg.message?.extendedTextMessage?.contextInfo?.participant;
-          if (!target) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
+          if (!target) { await react('❌'); await sock.sendMessage(sender, { text: getCommandHelp('promote') }); break; }
           await sock.groupParticipantsUpdate(sender, [target], 'promote');
           await sock.sendMessage(sender, { text: `✅ Promote @${target.split('@')[0]}`, mentions: [target] });
           await react('✅');
@@ -414,10 +356,9 @@ async function startBot() {
         }
 
         case 'demote': {
-          const help = getCommandHelp(command);
-          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); return; }
+          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); break; }
           const target = msg.message?.extendedTextMessage?.contextInfo?.participant;
-          if (!target) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
+          if (!target) { await react('❌'); await sock.sendMessage(sender, { text: getCommandHelp('demote') }); break; }
           await sock.groupParticipantsUpdate(sender, [target], 'demote');
           await sock.sendMessage(sender, { text: `⬇️ Demote @${target.split('@')[0]}`, mentions: [target] });
           await react('✅');
@@ -425,10 +366,9 @@ async function startBot() {
         }
 
         case 'kick': {
-          const help = getCommandHelp(command);
-          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); return; }
+          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); break; }
           const target = msg.message?.extendedTextMessage?.contextInfo?.participant;
-          if (!target) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
+          if (!target) { await react('❌'); await sock.sendMessage(sender, { text: getCommandHelp('kick') }); break; }
           await sock.groupParticipantsUpdate(sender, [target], 'remove');
           await sock.sendMessage(sender, { text: `👢 Kick @${target.split('@')[0]}`, mentions: [target] });
           await react('✅');
@@ -436,78 +376,73 @@ async function startBot() {
         }
 
         case 'add': {
-          const help = getCommandHelp(command);
-          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); return; }
-          if (!args[0]) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
-          const userJid = args[0].replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-          await sock.groupParticipantsUpdate(sender, [userJid], 'add');
+          if (!isGroup || (!isAdmin && !isFromMe) || !isBotAdmin) { await react('❌'); break; }
+          if (!args[0]) { await react('❌'); await sock.sendMessage(sender, { text: getCommandHelp('add') }); break; }
+          const jid = args[0].replace(/[^0-9]/g,'') + '@s.whatsapp.net';
+          await sock.groupParticipantsUpdate(sender, [jid], 'add');
           await sock.sendMessage(sender, { text: `➕ ${args[0]} ditambahkan.` });
           await react('✅');
           break;
         }
 
         case 'tagall':
-          if (!isGroup || (!isAdmin && !isFromMe)) { await react('❌'); return; }
+          if (!isGroup || (!isAdmin && !isFromMe)) { await react('❌'); break; }
           await sock.sendMessage(sender, { text: args.join(' ') || '📢 Tag all', mentions: groupMetadata.participants.map(p => p.id) });
           await react('✅');
           break;
 
-        // ---------- SECURITY ----------
+        // ==================== SECURITY ====================
         case 'antilink': {
-          const help = getCommandHelp(command);
-          if (!isGroup || (!isAdmin && !isFromMe)) { await react('❌'); return; }
-          const status = args[0]?.toLowerCase();
-          if (status !== 'on' && status !== 'off') { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
-          setGroupConfig(sender, { antilink: status === 'on' });
+          if (!isGroup || (!isAdmin && !isFromMe)) { await react('❌'); break; }
+          const st = args[0]?.toLowerCase();
+          if (st !== 'on' && st !== 'off') { await react('❌'); await sock.sendMessage(sender, { text: getCommandHelp('antilink') }); break; }
+          setGroupConfig(sender, { antilink: st === 'on' });
           await react('✅');
-          await sock.sendMessage(sender, { text: `Antilink ${status === 'on' ? 'AKTIF' : 'MATI'}` });
+          await sock.sendMessage(sender, { text: `Antilink ${st === 'on' ? 'AKTIF' : 'MATI'}` });
           break;
         }
 
         case 'welcome': {
-          const help = getCommandHelp(command);
-          if (!isGroup || (!isAdmin && !isFromMe)) { await react('❌'); return; }
-          const status = args[0]?.toLowerCase();
-          if (status !== 'on' && status !== 'off') { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
-          setGroupConfig(sender, { welcome: status === 'on' });
+          if (!isGroup || (!isAdmin && !isFromMe)) { await react('❌'); break; }
+          const st = args[0]?.toLowerCase();
+          if (st !== 'on' && st !== 'off') { await react('❌'); await sock.sendMessage(sender, { text: getCommandHelp('welcome') }); break; }
+          setGroupConfig(sender, { welcome: st === 'on' });
           await react('✅');
-          await sock.sendMessage(sender, { text: `Welcome ${status === 'on' ? 'AKTIF' : 'MATI'}` });
+          await sock.sendMessage(sender, { text: `Welcome ${st === 'on' ? 'AKTIF' : 'MATI'}` });
           break;
         }
 
         case 'antitoxic': {
-          const help = getCommandHelp(command);
-          if (!isGroup || (!isAdmin && !isFromMe)) { await react('❌'); return; }
-          const status = args[0]?.toLowerCase();
-          if (status !== 'on' && status !== 'off') { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
-          setGroupConfig(sender, { antitoxic: status === 'on' });
+          if (!isGroup || (!isAdmin && !isFromMe)) { await react('❌'); break; }
+          const st = args[0]?.toLowerCase();
+          if (st !== 'on' && st !== 'off') { await react('❌'); await sock.sendMessage(sender, { text: getCommandHelp('antitoxic') }); break; }
+          setGroupConfig(sender, { antitoxic: st === 'on' });
           await react('✅');
-          await sock.sendMessage(sender, { text: `Antitoxic ${status === 'on' ? 'AKTIF' : 'MATI'}` });
+          await sock.sendMessage(sender, { text: `Antitoxic ${st === 'on' ? 'AKTIF' : 'MATI'}` });
           break;
         }
 
         case 'listbadword': {
-          const badwords = getGroupConfig(sender).badwords || [];
+          const bw = getGroupConfig(sender).badwords || [];
           await react('✅');
-          await sock.sendMessage(sender, { text: `Kata toxic: ${badwords.join(', ') || 'Tidak ada'}` });
+          await sock.sendMessage(sender, { text: `Kata toxic: ${bw.join(', ') || 'Tidak ada'}` });
           break;
         }
 
         case 'addbadword': {
-          const help = getCommandHelp(command);
-          if (!isGroup || (!isAdmin && !isFromMe)) { await react('❌'); return; }
-          const word = args[0];
-          if (!word) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
-          const conf = getGroupConfig(sender);
-          conf.badwords = conf.badwords || [];
-          if (!conf.badwords.includes(word)) conf.badwords.push(word);
-          setGroupConfig(sender, conf);
+          if (!isGroup || (!isAdmin && !isFromMe)) { await react('❌'); break; }
+          const w = args[0];
+          if (!w) { await react('❌'); await sock.sendMessage(sender, { text: getCommandHelp('addbadword') }); break; }
+          const cfg = getGroupConfig(sender);
+          cfg.badwords = cfg.badwords || [];
+          if (!cfg.badwords.includes(w)) cfg.badwords.push(w);
+          setGroupConfig(sender, cfg);
           await react('✅');
-          await sock.sendMessage(sender, { text: `'${word}' ditambahkan.` });
+          await sock.sendMessage(sender, { text: `'${w}' ditambahkan.` });
           break;
         }
 
-        // ---------- OWNER & OTHER ----------
+        // ==================== OWNER & LAINNYA ====================
         case 'totaluser': {
           const chats = await sock.fetchAllWhatsAppContacts();
           await sock.sendMessage(sender, { text: `Total chat: ${chats.length}` });
@@ -516,69 +451,55 @@ async function startBot() {
         }
 
         case 'broadcast': {
-          const help = getCommandHelp(command);
-          if (!senderIsOwner) { await react('❌'); return; }
-          const bcText = args.join(' ');
-          if (!bcText) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
-          const allChats = await sock.fetchAllWhatsAppContacts();
-          for (const chat of allChats) {
-            try { await sock.sendMessage(chat.id, { text: bcText }); await delay(200); } catch (e) {}
-          }
+          if (!senderIsOwner) { await react('❌'); break; }
+          const txt = args.join(' ');
+          if (!txt) { await react('❌'); await sock.sendMessage(sender, { text: getCommandHelp('broadcast') }); break; }
+          const all = await sock.fetchAllWhatsAppContacts();
+          for (const c of all) { try { await sock.sendMessage(c.id, { text: txt }); await delay(200); } catch (e) {} }
           await react('✅');
           break;
         }
 
         case 'delete': {
-          const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
-          if (!quotedMsg) return;
-          try {
-            await sock.sendMessage(sender, { delete: msg.key });
-            await react('✅');
-          } catch (e) {
-            await react('❌');
-          }
+          const qm = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
+          if (!qm) break;
+          try { await sock.sendMessage(sender, { delete: msg.key }); await react('✅'); } catch (e) { await react('❌'); }
           break;
         }
 
         case 'self':
-          if (!senderIsOwner) { await react('❌'); return; }
+          if (!senderIsOwner) { await react('❌'); break; }
           setMode('self');
           await react('🔒');
           await sock.sendMessage(sender, { text: '🔒 Mode SELF aktif.' });
           break;
 
         case 'public':
-          if (!senderIsOwner) { await react('❌'); return; }
+          if (!senderIsOwner) { await react('❌'); break; }
           setMode('public');
           await react('🌐');
           await sock.sendMessage(sender, { text: '🌐 Mode PUBLIC aktif.' });
           break;
 
         case 'addowner': {
-          const help = getCommandHelp(command);
-          if (!senderIsOwner) { await react('❌'); return; }
-          if (!args[0]) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
-          const targetJid = args[0].replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-          if (addOwner(targetJid)) {
+          if (!senderIsOwner) { await react('❌'); break; }
+          if (!args[0]) { await react('❌'); await sock.sendMessage(sender, { text: getCommandHelp('addowner') }); break; }
+          const tj = args[0].replace(/[^0-9]/g,'') + '@s.whatsapp.net';
+          if (addOwner(tj)) {
             await react('✅');
-            await sock.sendMessage(sender, { text: `✅ Owner @${targetJid.split('@')[0]} ditambahkan.`, mentions: [targetJid] });
-          } else {
-            await react('⚠️');
-          }
+            await sock.sendMessage(sender, { text: `✅ Owner @${tj.split('@')[0]} ditambahkan.`, mentions: [tj] });
+          } else await react('⚠️');
           break;
         }
 
         case 'delowner': {
-          const help = getCommandHelp(command);
-          if (!senderIsOwner) { await react('❌'); return; }
-          if (!args[0]) { await react('❌'); await sock.sendMessage(sender, { text: help }); return; }
-          const targetJid = args[0].replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-          if (removeOwner(targetJid)) {
+          if (!senderIsOwner) { await react('❌'); break; }
+          if (!args[0]) { await react('❌'); await sock.sendMessage(sender, { text: getCommandHelp('delowner') }); break; }
+          const tj = args[0].replace(/[^0-9]/g,'') + '@s.whatsapp.net';
+          if (removeOwner(tj)) {
             await react('✅');
-            await sock.sendMessage(sender, { text: `❌ Owner @${targetJid.split('@')[0]} dihapus.`, mentions: [targetJid] });
-          } else {
-            await react('⚠️');
-          }
+            await sock.sendMessage(sender, { text: `❌ Owner @${tj.split('@')[0]} dihapus.`, mentions: [tj] });
+          } else await react('⚠️');
           break;
         }
 
@@ -590,9 +511,7 @@ async function startBot() {
           break;
         }
 
-        // ---------- DEFAULT ----------
-        default: {
-          // Antilink (grup)
+        default:
           if (isGroup && body.includes('https://')) {
             const conf = getGroupConfig(sender);
             if (conf.antilink && isBotAdmin && !isAdmin && !isFromMe) {
@@ -600,7 +519,6 @@ async function startBot() {
             }
           }
           break;
-        }
       }
     } catch (err) {
       console.error('Error:', err.message);
@@ -610,5 +528,4 @@ async function startBot() {
   return sock;
 }
 
-// Jalankan bot
 startBot().catch(err => console.error('Fatal:', err));
